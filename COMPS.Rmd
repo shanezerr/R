@@ -1,0 +1,411 @@
+---
+title: 'Comps: Econ Anxiety & Authoritarianism'
+subtitle: "The Effect of Economic Anxiety on Support for Authoritarianism"
+author: "Shane Zerr"
+date: "May 1st, 2021"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  word_document: default
+---
+
+#R Prep
+##Settings
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+##Packages
+```{r, error=FALSE, message=FALSE}
+library(tidyverse)
+library(car)
+library(stats)
+library(DescTools)
+library(ggplot2)
+library(foreign)
+library(arm)
+library(stargazer)
+library(lm.beta)
+library(lmtest)
+library(sandwich)
+library(mosaic)
+library(weights)
+library(pewmethods)
+library(anesrake)
+```
+
+##Import Data
+```{r, error=FALSE, message=FALSE}
+#This is the Trump-era, pre-covid data.
+orig.anes <- read_csv("~/Documents/R Studio/COMPS/Data/anes_pilot_2018.csv")
+
+#This is my Biden-era, covid data.
+orig.qualtrics <- read_csv("~/Documents/R Studio/COMPS/Data/Qualtrics_Data.csv")
+
+#Demographic crosstabs for reweighing the qualtrics data.
+data("acs_2017_excerpt")
+```
+
+##Recode
+```{r, error=FALSE, message=FALSE}
+##Note: dplyr clashes with MASS, so I have to use dplyr::select
+anes <- dplyr::select(orig.anes, finworry, strlead, strpres, econ12mo, finpar1, finpar2, improve1, improve2, educ, gender, birthyr, whiteid, rr1, weight, pid7x)
+
+qualtrics <- dplyr::select(orig.qualtrics, ResponseId, covid_anxiety, strlead, strpres, finworry, econ12mo, finpar1, finpar2, improve, educ, gender, birthyr, white, whiteid, rr1)
+```
+
+###Recode for Descriptive Stats
+```{r}
+#New variable Strong Leader
+anes.stat <- anes
+anes.stat$strlead <- anes$strlead
+#Re-label responses according to codebook
+anes.stat$strlead[anes.stat$strlead==-1] <- NA
+
+#New variable Strong President
+anes.stat$strpres <- anes$strpres
+#Re-label responses according to codebook
+anes.stat$strpres[anes.stat$strpres==-1] <- NA
+anes.stat$strpres[anes.stat$strpres==-7] <- NA
+
+#New variable Financial Improvement
+anes.stat$improve1 <- anes$improve1
+#Re-label responses according to codebook
+anes.stat$improve1[anes.stat$improve1==-1] <- NA
+
+#New variable Financial Improvement
+anes.stat$improve2 <- anes$improve2
+#Re-label responses according to codebook
+anes.stat$improve2[anes.stat$improve2==-1] <- NA
+
+#New variable combined improve
+anes.stat$improve <- NA
+anes.stat$improve <- ifelse(is.na(anes.stat$improve1) == TRUE, 
+                            anes.stat$improve2, anes.stat$improve1)
+
+#New variable Economy 12 Months
+anes.stat$econ12mo <- anes$econ12mo
+#Re-label responses according to codebook
+anes.stat$econ12mo[anes.stat$econ12mo==-1] <- NA
+anes.stat$econ12mo[anes.stat$econ12mo==-7] <- NA
+
+#New variable Finance Parents 1
+anes.stat$finpar1 <- anes$finpar1
+#Re-label responses according to codebook
+anes.stat$finpar1[anes.stat$finpar1==-1] <- NA
+
+#New variable Finance Parents 1
+anes.stat$finpar2 <- anes$finpar2
+#Re-label responses according to codebook
+anes.stat$finpar2[anes.stat$finpar2==-1] <- NA
+
+#New variable Economy 12 Months
+anes.stat$finworry <- anes$finworry
+
+#New variable Economy 12 Months
+anes.stat$educ <- anes$educ
+
+#New variable Economy 12 Months
+anes.stat$birthyr <- anes$birthyr
+
+#New variable Economy 12 Months
+anes.stat$gender <- anes$gender
+
+#New variable White Identity
+anes.stat$whiteid <- anes$whiteid
+anes.stat$whiteid[anes.stat$whiteid==-1] <- NA
+anes.stat$whiteid[anes.stat$whiteid==-7] <- NA
+
+#New variable Racial Resentment 1
+anes.stat$rr1 <- anes$rr1
+anes.stat$rr1[anes.stat$rr1==-1] <- NA
+
+#New variable ~Rural
+anes.stat$pid7x <- anes$pid7x
+anes.stat$pid7x[anes.stat$pid7x==-7] <- NA
+
+#New variable Statistical Weight
+anes.stat$weight <- anes$weight
+
+#Re-label responses according to codebook
+qualtrics$gender[qualtrics$gender==3] <- NA
+qualtrics$gender[qualtrics$gender==4] <- NA
+
+#Re-label responses according to codebook
+qualtrics$white[qualtrics$white==4] <- NA
+```
+
+###Recode ACS Crosstabs & Qualtrics prep.
+```{r, echo=FALSE}
+#Rename ACS tibble vectors to match my data sets
+acs_2017_excerpt <- rename(acs_2017_excerpt, gender = sex)
+acs_2017_excerpt <- rename(acs_2017_excerpt, educ = receduc)
+acs_2017_excerpt <- rename(acs_2017_excerpt, birthyr = recage)
+
+#Recoding Qualtrics to match my dummy variables
+qualtrics.weight <- qualtrics
+qualtrics.weight$gender[qualtrics.weight$gender=="1"] <- "Male"
+qualtrics.weight$gender[qualtrics.weight$gender=="2"] <- "Female"
+
+qualtrics.weight$educ[qualtrics.weight$educ=="1"] <- "HS grad or less"
+qualtrics.weight$educ[qualtrics.weight$educ=="2"] <- "HS grad or less"
+qualtrics.weight$educ[qualtrics.weight$educ=="3"] <- "Some coll/Assoc degree"
+qualtrics.weight$educ[qualtrics.weight$educ=="4"] <- "Some coll/Assoc degree"
+qualtrics.weight$educ[qualtrics.weight$educ=="5"] <- "Coll+"
+qualtrics.weight$educ[qualtrics.weight$educ=="6"] <- "Coll+"
+
+qualtrics.weight$birthyr[qualtrics.weight$birthyr <= 1956] <- "65+"
+qualtrics.weight$birthyr[qualtrics.weight$birthyr > 1956 & qualtrics.weight$birthyr <= 1966] <- "55-64"
+qualtrics.weight$birthyr[qualtrics.weight$birthyr > 1966 & qualtrics.weight$birthyr <= 1976] <- "45-54"
+qualtrics.weight$birthyr[qualtrics.weight$birthyr > 1976 & qualtrics.weight$birthyr <= 1986] <- "35-44"
+qualtrics.weight$birthyr[qualtrics.weight$birthyr > 1986 & qualtrics.weight$birthyr <= 1996] <- "25-34"
+qualtrics.weight$birthyr[qualtrics.weight$birthyr > 1976 & qualtrics.weight$birthyr <= 2003] <- "18-24"
+
+#Check qualtrics.weight df type
+class(qualtrics.weight)
+
+#If tbl, run below code to coerce to data.frame
+qualtrics.weight <- as.data.frame(qualtrics.weight)
+class(qualtrics.weight)  #If this works as intended, it should print: [1] "data.frame"
+                         #anesweight cannot compute weights if the survey data set is a tbl.  
+
+#Transform data from charachter to factor. Boy is anesweight picky.  
+qualtrics.weight$gender <- as.factor(qualtrics.weight$gender) 
+qualtrics.weight$educ <- as.factor(qualtrics.weight$educ) 
+qualtrics.weight$birthyr <- as.factor(qualtrics.weight$birthyr) 
+
+
+```
+
+###Creating Weights with ANES Rake
+```{r}
+#Create Target Weighting List
+target <- with(acs_2017_excerpt, list(
+  educ = wpct(educ, weight),
+  gender  = wpct(gender, weight),
+  birthyr  = wpct(birthyr, weight)
+))
+
+#Check List
+str(target)
+
+#Compare to Qualtrics data, if you want.  Qualtrics skews both male and educated, for example
+wpct(qualtrics.weight$educ)
+wpct(qualtrics.weight$gender)
+wpct(qualtrics.weight$birthyr)
+
+#Iteratively rake until convergence. 
+raking <- anesrake(target,
+                    qualtrics.weight,
+                    qualtrics.weight$ResponseId,
+                    cap=10,                      # Maximum allowed weight per iteration
+                    choosemethod = "total",       # How are parameters compared for selection?
+                    type = "pctlim",              # What selection criterion is used?
+                    pctlim = 0.05                 # Threshold for selection
+                     )
+
+#Raking summary
+raking_summary <- summary(raking)
+
+#What variables were used for raking?
+raking_summary$raking.variables
+
+#Apply weights into qualtrics data.  
+qualtrics$weight <- raking$weightvec
+```
+
+###Recode for WhiteID
+```{r}
+#Create new data frame to recode people who are not white as having no white identity..
+qualtrics.whiteid <- qualtrics
+
+#Create new temp column with value <
+qualtrics.whiteid$temp <- 5
+qualtrics.whiteid$whiteid <- ifelse(is.na(qualtrics.whiteid$whiteid) == TRUE, 
+                                    qualtrics.whiteid$temp, qualtrics.whiteid$whiteid)
+```
+
+#Model
+##ANES Model with Prejudice & Weight
+###Strpres w/ Prejudice & Weight
+```{r}
+strpres.anes <- lm(strpres ~ econ12mo + finworry + improve + finpar2 +  whiteid + rr1 + educ + gender + birthyr, data=anes.stat, weights=weight)
+
+stargazer(strpres.anes, title="Effect of Financial Anxiety on Support for Unchecked President", 
+          align=TRUE, dep.var.labels=c("Support for Unchecked President"), 
+          covariate.labels=c("Short-term Systemic", 
+                             "Short-term Personal", 
+                             "Long-term Systemic", 
+                             "Long-term Personal", 
+                             "White Identiy", 
+                             "Racial Resentment", 
+                             "Education Level", 
+                             "Gender", 
+                             "Age", 
+                             "Demographic Re-weighting"),
+                    omit.stat = c("ser", "f"), type= "text")
+```
+
+Strlead lmbeta
+```{r}
+lm.beta(strpres.anes)
+```
+
+
+###Strlead w/ Prejudice & Weight
+```{r}
+strlead.anes <- lm(strlead ~ econ12mo + finworry + improve + finpar1 +  whiteid + rr1 + educ + gender + birthyr, data=anes.stat, weights=weight)
+
+stargazer(strlead.anes, title="Effect of Financial Anxiety on Support for Authoritarian Tendencies", 
+          align=TRUE, dep.var.labels=c("Support for Strong Leader who Bends Rules"), 
+          covariate.labels=c("Short-term Systemic", 
+                             "Short-term Personal", 
+                             "Long-term Systemic", 
+                             "Long-term Personal", 
+                             "White Identiy", 
+                             "Racial Resentment", 
+                             "Education Level", 
+                             "Gender", 
+                             "Age"),
+                    omit.stat = c("ser", "f"), type= "text")
+```
+
+Strlead lmbeta
+```{r}
+lm.beta(strlead.anes)
+```
+
+##Qualtrics Model with Prejudice & Weight
+###Strpres w/ Prejudice & Weight
+```{r}
+
+#                         !!!!!Note to Shane!!!!
+  #Make sure to choose finpar1 or finpar2 or just combine them into an aggregate finpar measure.  
+    #I just included both slightly different wordings in the qualtrics to be able to direcly compare with ANES results in 1:1. 
+
+strpres.qualtrics <- lm(strpres ~ econ12mo + finworry + improve + finpar2 +  whiteid + rr1 + educ + gender + birthyr, data=qualtrics.whiteid, weights=weight)
+
+
+stargazer(strpres.qualtrics, title="Effect of Financial Anxiety on Support for Unchecked President", 
+          align=TRUE, dep.var.labels=c("Support for Unchecked President"), 
+          covariate.labels=c("Short-term Systemic", 
+                             "Short-term Personal", 
+                             "Long-term Systemic", 
+                             "Long-term Personal", 
+                             "White Identiy", 
+                             "Racial Resentment", 
+                             "Education Level", 
+                             "Gender", 
+                             "Age"),
+                    omit.stat = c("ser", "f"), type= "text")
+```
+
+Strlead lmbeta
+```{r}
+lm.beta(strpres.qualtrics)
+```
+
+
+###Strlead w/ Prejudice & Weight
+```{r}
+strlead.qualtrics <- lm(strlead ~ finworry + econ12mo + improve + finpar1 +  whiteid + rr1 + educ + gender + birthyr, data=qualtrics.whiteid, weights=weight)
+
+stargazer(strlead.qualtrics, title="Effect of Financial Anxiety on Support for Authoritarian Tendencies", 
+          align=TRUE, dep.var.labels=c("Support for Strong Leader who Bends Rules"), 
+          covariate.labels=c("Short-term Systemic", 
+                             "Short-term Personal", 
+                             "Long-term Systemic", 
+                             "Long-term Personal", 
+                             "White Identiy", 
+                             "Racial Resentment", 
+                             "Education Level", 
+                             "Gender", 
+                             "Age", 
+                             "Demographic Re-weighting"),
+                    omit.stat = c("ser", "f"), type= "text")
+```
+
+Strlead lmbeta
+```{r}
+lm.beta(strlead.qualtrics)
+```
+
+#Statistics Tests
+##Strpres.anes
+Coefficient Plot
+```{r, fig.show='show'}
+arm::coefplot(strpres.anes, 
+              xlab = "OLS Multivar Regression Model: Strpres & ANES" , mar = c(4, 4, 5, 6), xlim = c(-1, 1))
+```
+
+Multicollinearity & VIF
+```{r}
+# 2. Calculate the VIF for model: VIF = 1 (Not correlated); 1 < VIF < 5 (Moderately correlated); VIF >=5 (Highly correlated)
+vif(strpres.anes)
+# Take the square root of the VIF to standardize it in terms of standard errors
+# Shows the impact of multicollinearity on hypothesis testing inferences
+sqrt(vif(strpres.anes))
+# Compare the standardized VIF to the threshold of 2.5 
+sqrt(vif(strpres.anes)) > 2.5 
+# If true, then this indicates that the standard errors are inflated by at least double due to the presence of multicollinearity. If false, then this indicates that the errors are inflated by less than 2.5x. Thus avoiding even a conservative threshold for problematic multicolinearity.
+```
+Thus, the StrLead Model passes VIF requirements.
+
+##Strlead.anes
+Coefficient Plot
+```{r, fig.show='show'}
+arm::coefplot(strlead.anes, 
+              xlab = "OLS Multivar Regression Model: Strlead & ANES" , mar = c(4, 4, 5, 6), xlim = c(-1, 1))
+```
+
+Multicollinearity & VIF
+```{r}
+# 2. Calculate the VIF for model: VIF = 1 (Not correlated); 1 < VIF < 5 (Moderately correlated); VIF >=5 (Highly correlated)
+vif(strlead.anes)
+# Take the square root of the VIF to standardize it in terms of standard errors
+# Shows the impact of multicollinearity on hypothesis testing inferences
+sqrt(vif(strlead.anes))
+# Compare the standardized VIF to the threshold of 2.5 
+sqrt(vif(strlead.anes)) > 2.5 
+# If true, then this indicates that the standard errors are inflated by at least double due to the presence of multicollinearity. If false, then this indicates that the errors are inflated by less than 2.5x. 
+```
+
+
+##Strpres.qualtrics
+Coefficient Plot
+```{r, fig.show='show'}
+arm::coefplot(strpres.qualtrics, 
+              xlab = "OLS Multivar Regression Model: Strpres & ANES" , mar = c(4, 4, 5, 6), xlim = c(-1, 1))
+```
+
+Multicollinearity & VIF
+```{r}
+# 2. Calculate the VIF for model: VIF = 1 (Not correlated); 1 < VIF < 5 (Moderately correlated); VIF >=5 (Highly correlated)
+vif(strpres.qualtrics)
+# Take the square root of the VIF to standardize it in terms of standard errors
+# Shows the impact of multicollinearity on hypothesis testing inferences
+sqrt(vif(strpres.qualtrics))
+# Compare the standardized VIF to the threshold of 2.5 
+sqrt(vif(strpres.qualtrics)) > 2.5 
+# If true, then this indicates that the standard errors are inflated by at least double due to the presence of multicollinearity. If false, then this indicates that the errors are inflated by less than 2.5x.
+```
+
+##Strlead.qualtrics
+Coefficient Plot
+```{r, fig.show='show'}
+arm::coefplot(strlead.qualtrics, 
+              xlab = "OLS Multivar Regression Model: STRPRES & ANES" , mar = c(4, 4, 5, 6), xlim = c(-1, 1))
+```
+
+Multicollinearity & VIF for 
+```{r}
+# 2. Calculate the VIF for model: VIF = 1 (Not correlated); 1 < VIF < 5 (Moderately correlated); VIF >=5 (Highly correlated)
+vif(strlead.qualtrics)
+# Take the square root of the VIF to standardize it in terms of standard errors
+# Shows the impact of multicollinearity on hypothesis testing inferences
+sqrt(vif(strlead.qualtrics))
+# Compare the standardized VIF to the threshold of 2.5 
+sqrt(vif(strlead.qualtrics)) > 2.5 
+# If true, then this indicates that the standard errors are inflated by at least double due to the presence of multicollinearity. If false, then this indicates that the errors are inflated by less than 2.5x.
+```
